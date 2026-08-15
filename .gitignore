@@ -8,7 +8,7 @@
 /src/audio.bin
 /src/audio.lst
 /src/audio.p
-/tools/__pycache__/
+__pycache__/
 /vendor/asl/
 /vendor/asl-releases/
 /vendor/downloads/
