@@ -1,0 +1,16 @@
+/assets/*
+!/assets/.gitkeep
+/build/
+/dist/
+/src/main.bin
+/src/main.lst
+/src/main.p
+/src/audio.bin
+/src/audio.lst
+/src/audio.p
+/tools/__pycache__/
+/vendor/asl/
+/vendor/asl-releases/
+/vendor/downloads/
+/vendor/softrender/
+/.venv/
