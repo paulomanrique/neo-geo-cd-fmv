@@ -16,7 +16,8 @@ for optional emulator verification.
 
 - 320×224 video at 15 fps.
 - 20×14 native 16×16, 4 bpp sprite tiles per frame.
-- Twenty spatial 15-color palettes, refreshed every four frames.
+- Twenty spatial 15-color palettes, fitted every four frames with adaptive retention.
+- Oklab-based tile prioritization and palette-index matching in the offline encoder.
 - Reconstruction-aware differential encoding with RAW, PackBits,
   XOR-plus-zero-RLE, bitplane updates, and exact graphics-cache reuse.
 - A 32,768-tile graphics RAM dictionary managed entirely by the offline

@@ -37,8 +37,9 @@ offset  size  field
 
 When flag bit 0 is set, the header is followed by 20 Neo Geo palettes. Every
 palette contains transparent color zero plus 15 visible colors, for 640 bytes
-total. Palettes are spatially assigned in a 5×4 grid and normally held for four
-frames.
+total. Palettes are spatially assigned in a 5×4 grid and reconsidered every four
+frames. Existing colors are retained when their Oklab error is within 2% of
+the new fit, and a payload is emitted only when the packed palettes change.
 
 The map contains 280 unsigned 16-bit graphics-cache slot IDs in row-major
 order. It is followed by the primary supply records. Remaining records begin

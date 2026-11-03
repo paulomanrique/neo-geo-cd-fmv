@@ -66,6 +66,52 @@ python3 tools/render_native_stream.py \
 The renderer follows the same cache references, continuation boundary, native
 sprite byte order, and palette mapping as the target decoder.
 
+Export the complete reconstructed stream, including decoded ADPCM-A audio, to
+a lossless Matroska file:
+
+```sh
+python3 tools/export_native_video.py build/generated build/preview.mkv
+```
+
+The exporter checks frame and audio CRCs, record boundaries, cache writes,
+and references against the decoder's previous-visible-map contract. Its RGB
+preview uses the reference renderer's palette model; it is not an emulator
+capture or a model of an analog display. Audio uses a WAV rate rounded to
+18,519 Hz rather than the chip's fractional rate.
+
+Compare two generated directories against the same source, with identical
+normalization and palette reconstruction for both:
+
+```sh
+python3 tools/compare_native_streams.py input.mp4 \
+  build/before/generated build/after/generated build/comparison.json
+```
+
+The report includes displayed RGB error, Oklab error, and the 95th percentile
+of per-frame Oklab error. It measures complete frames, including tiles that
+the encoder chose not to update.
+
+For a known frame, compare an emulator's native-resolution PNG to the stream:
+
+```sh
+python3 tools/compare_native_capture.py build/generated/STREAM.DAT 900 capture.png
+```
+
+Disable shaders and scaling in the captured image. `--overscan 8` accepts a
+304×224 capture with eight pixels removed on each side. A different palette
+conversion may require an explicit `--max-mean-error` tolerance. This check is
+separate from source fidelity: it checks that playback matches authored data.
+
+`--metric rgb --palette-stability 0` on the encoder disables the new perceptual
+selection and palette-retention policy for controlled experiments. Frame byte
+budgets and the 64-tile upload ceiling are independent of these options.
+
+Run the offline regression checks without media or a BIOS:
+
+```sh
+make check PYTHON=.venv/bin/python
+```
+
 Analyze codec candidates on any set of clips:
 
 ```sh
@@ -97,6 +143,11 @@ The smoke test checks:
 - sprite, palette, and tile activity;
 - audio production through two bank transitions;
 - ring overflow and fatal decoder diagnostics.
+
+For clips shorter than 1,801 frames, verification captures the last frame
+instead. The capture is compared with the authored stream using a default
+mean RGB tolerance of 1.0/255 for palette-conversion differences. Override
+`MAME_MAX_MEAN_ERROR` only when using a different documented color model.
 
 ## Emulator notes
 

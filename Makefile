@@ -14,11 +14,11 @@ DISC := build/disc
 DIST := dist
 NAME := neo-geo-cd-fmv
 
-.PHONY: all clean verify
+.PHONY: all clean verify check
 
 all: $(DIST)/$(NAME).cue $(DIST)/$(NAME).bin
 
-$(GENERATED)/video.json: $(INPUT_VIDEO) tools/encode_native_stream.py
+$(GENERATED)/video.json: $(INPUT_VIDEO) tools/encode_native_stream.py tools/perceptual.py
 	mkdir -p $(GENERATED)
 	$(PYTHON) tools/encode_native_stream.py $(INPUT_VIDEO) $(GENERATED)
 
@@ -87,6 +87,10 @@ $(DIST)/$(NAME).cue $(DIST)/$(NAME).bin &: $(DISC)/$(NAME).chd
 
 verify: all
 	NAME=$(NAME) PYTHON=$(PYTHON) tests/verify.sh
+
+check:
+	$(PYTHON) tests/test_audio_banks.py
+	$(PYTHON) tests/test_perceptual.py
 
 clean:
 	rm -rf build dist src/main.bin src/main.lst src/main.p \

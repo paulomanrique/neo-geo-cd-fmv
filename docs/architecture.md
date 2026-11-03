@@ -30,7 +30,10 @@ bytes in Neo Geo sprite bitplane order. The screen uses a fixed 5×4 grid of
 visible colors; palette entries are matched across updates so indices remain as
 stable as possible.
 
-Palettes are trained over groups of four frames. Within each frame the encoder
+Palettes are trained over groups of four frames. A region keeps its previous
+palette when its Oklab error is within 2% of the newly fitted palette's error.
+Unchanged palette payloads are omitted. Palette indices are matched using
+Oklab distance. Within each frame the encoder
 constructs the image the decoder would actually display, not an ideal target
 that may exceed the packet budget. Future deltas are always computed from this
 reconstructed state.
@@ -50,7 +53,7 @@ graphics upload. A miss is represented by the smallest of:
 - `XOR_PREVIOUS`: XOR against the same screen position, then zero-run RLE;
 - `PLANES_PREVIOUS`: a four-bit changed-plane mask plus 32 bytes per plane.
 
-Candidates are ranked by visual-error reduction per encoded byte. Positions
+Candidates are ranked by squared Oklab error reduction per encoded byte. Positions
 inside a one-tile border receive a 1.25× score, preserving detail in the center
 of the frame. At most 64 tiles are uploaded per frame; optical space and CPU
 upload work are separate budgets.

@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from perceptual import oklab, squared_error
 
 
 WIDTH = 320
@@ -74,7 +75,7 @@ MODE_XOR_PREVIOUS = 2
 MODE_PLANES_PREVIOUS = 3
 
 
-def hungarian(cost: list[list[int]]) -> list[int]:
+def hungarian(cost: list[list[float]]) -> list[int]:
     """Return the selected column for each row of a square cost matrix."""
     n = len(cost)
     u = [0] * (n + 1)
@@ -185,6 +186,9 @@ def probe_frame_count(path: Path) -> int:
 def quantize_group(
     frames: list[np.ndarray],
     previous_palettes: list[list[tuple[int, int, int]]] | None,
+    *,
+    metric: str = "oklab",
+    stability: float = 0.02,
 ) -> tuple[list[np.ndarray], list[list[tuple[int, int, int]]]]:
     indexed = [np.zeros((HEIGHT, WIDTH), dtype=np.uint8) for _ in frames]
     palettes: list[list[tuple[int, int, int]]] = []
@@ -211,12 +215,29 @@ def quantize_group(
             palette_id = py * PALETTE_COLUMNS + px
             if previous_palettes is not None:
                 old = previous_palettes[palette_id]
+                if stability > 0:
+                    fixed = Image.new("P", (1, 1))
+                    repeated = [old[i % 15] for i in range(256)]
+                    fixed.putpalette([c for color in repeated for c in color])
+                    old_indices = np.asarray(
+                        Image.fromarray(combined).quantize(palette=fixed, dither=Image.Dither.NONE),
+                        dtype=np.uint8,
+                    ) % 15
+                    old_rgb = np.asarray(old, dtype=np.uint8)[old_indices]
+                    new_rgb = np.asarray(colors, dtype=np.uint8)[current]
+                    if squared_error(combined, old_rgb).mean() <= (
+                        squared_error(combined, new_rgb).mean() * (1 + stability) + 1e-12
+                    ):
+                        colors = old
+                        current = old_indices
+                old_values = oklab(np.asarray(old)) if metric == "oklab" else np.asarray(old)
+                new_values = oklab(np.asarray(colors)) if metric == "oklab" else np.asarray(colors)
                 cost = [
                     [
                         sum((a - b) ** 2 for a, b in zip(old_color, new_color))
-                        for new_color in colors
+                        for new_color in new_values
                     ]
-                    for old_color in old
+                    for old_color in old_values
                 ]
                 slot_to_current = hungarian(cost)
                 current_to_slot = np.zeros(15, dtype=np.uint8)
@@ -415,9 +436,12 @@ def render_indexed(
     return output
 
 
-def tile_error(left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    difference = np.abs(left.astype(np.int16) - right.astype(np.int16))
-    return difference.reshape(TILES_Y, TILE, TILES_X, TILE, 3).sum(axis=(1, 3, 4)).reshape(-1)
+def tile_error(left: np.ndarray, right: np.ndarray, metric: str = "oklab") -> np.ndarray:
+    if metric == "rgb":
+        difference = np.abs(left.astype(np.int16) - right.astype(np.int16)).sum(axis=-1)
+    else:
+        difference = squared_error(left, right)
+    return difference.reshape(TILES_Y, TILE, TILES_X, TILE).sum(axis=(1, 3)).reshape(-1)
 
 
 @dataclass
@@ -550,7 +574,12 @@ def main() -> int:
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--metric", choices=("rgb", "oklab"), default="oklab")
+    parser.add_argument("--palette-stability", type=float, default=0.02,
+                        help="relative palette-error tolerance for keeping existing colors; 0 disables")
     args = parser.parse_args()
+    if not 0 <= args.palette_stability <= 1:
+        parser.error("--palette-stability must be between 0 and 1")
     args.output.mkdir(parents=True, exist_ok=True)
 
     frame_count = probe_frame_count(args.input)
@@ -577,14 +606,20 @@ def main() -> int:
     total_used = 0
     peak_used = 0
     total_absolute_error = 0
+    total_perceptual_error = 0.0
+    palette_updates = 0
+    previous_packed_palette = None
     mode_counts = {str(mode): 0 for mode in range(4)}
 
     def consume(rgb_frames: list[np.ndarray]) -> None:
         nonlocal previous_indexed, previous_native, previous_map
         nonlocal previous_palettes, encoded_frame, total_supplies
         nonlocal peak_supplies, total_used, peak_used, total_absolute_error
+        nonlocal total_perceptual_error, palette_updates, previous_packed_palette
 
-        indexed_frames, palettes = quantize_group(rgb_frames, previous_palettes)
+        indexed_frames, palettes = quantize_group(
+            rgb_frames, previous_palettes, metric=args.metric, stability=args.palette_stability
+        )
         previous_palettes = palettes
         packed_palette = palette_bytes(palettes)
         for group_index, (rgb, target_indexed) in enumerate(
@@ -613,16 +648,18 @@ def main() -> int:
 
             baseline_rgb = render_indexed(baseline_indexed, palettes)
             target_rgb = render_indexed(target_indexed, palettes)
-            baseline_error = tile_error(rgb, baseline_rgb)
-            target_error = tile_error(rgb, target_rgb)
+            baseline_error = tile_error(rgb, baseline_rgb, args.metric)
+            target_error = tile_error(rgb, target_rgb, args.metric)
 
-            flags = 1 if group_index == 0 else 0
+            flags = int(packed_palette != previous_packed_palette)
+            palette_updates += flags
+            previous_packed_palette = packed_palette
             fixed_bytes = VIDEO_HEADER_BYTES + (PALETTE_BYTES if flags else 0) + TILES * 2
-            candidates: list[tuple[float, int, int, bytes]] = []
+            candidates: list[tuple[float, float, int, bytes]] = []
             for position, current in enumerate(target_native):
                 if current == previous_native[position] or current in exact_previous:
                     continue
-                improvement = int(baseline_error[position]) - int(target_error[position])
+                improvement = float(baseline_error[position]) - float(target_error[position])
                 if improvement <= 0:
                     continue
                 mode, payload = best_supply(previous_native[position], current)
@@ -737,6 +774,7 @@ def main() -> int:
             total_absolute_error += int(
                 np.abs(rgb.astype(np.int16) - rendered.astype(np.int16)).sum()
             )
+            total_perceptual_error += float(squared_error(rgb, rendered).sum())
             total_supplies += len(supplies)
             peak_supplies = max(peak_supplies, len(supplies))
             total_used += used
@@ -794,6 +832,10 @@ def main() -> int:
         "peak_supplies": peak_supplies,
         "maximum_supplies": MAX_SUPPLIES,
         "mean_absolute_rgb_error": total_absolute_error / (frame_count * WIDTH * HEIGHT * 3),
+        "mean_squared_oklab_error": total_perceptual_error / (frame_count * WIDTH * HEIGHT),
+        "selection_metric": args.metric,
+        "palette_stability": args.palette_stability,
+        "palette_updates": palette_updates,
         "center_priority_inset_tiles": CENTER_PRIORITY_INSET,
         "center_priority_multiplier": CENTER_PRIORITY_NUM / CENTER_PRIORITY_DEN,
         "mode_counts": mode_counts,

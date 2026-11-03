@@ -4,6 +4,7 @@ local space = cpu.spaces["program"]
 local host_frame = 0
 local started = false
 local play_start_host = nil
+local target_frame = tonumber(os.getenv("FMV_TARGET_FRAME")) or 1800
 
 emu.register_frame_done(function()
     host_frame = host_frame + 1
@@ -38,25 +39,27 @@ emu.register_frame_done(function()
         return
     end
 
-    if playing == 1 and current >= 1800 then
-        local palette = space:read_u16(0x400002)
-        local sprite = space:read_u32(0xE00080)
+    if play_start_host ~= nil and current >= target_frame then
         local visible_map = space:read_u32(0x10002C)
-        local tile = space:read_u16(visible_map + 100 * 2)
-        if palette == 0 or sprite == 0 or tile == 0 then
-            print(string.format(
-                "FMV_SMOKE_FAIL palette=%04X sprite=%08X tile=%04X",
-                palette, sprite, tile))
-        else
-            print(string.format(
-                "FMV_SMOKE_OK frame=%d playback_fields=%d late_fields=%d sectors=%d buffered=%d paused=%d audio_reply=%d audio_write=%d audio_upload=%d palette=%04X sprite=%08X tile=%04X",
-                current, host_frame - play_start_host, space:read_u32(0x10004C),
-                space:read_u32(0x100020), space:read_u16(0x100012),
-                space:read_u8(0x100008), space:read_u8(0x100005),
-                space:read_u32(0x100034), space:read_u32(0x100038),
-                palette, sprite, tile))
-            machine.video:snapshot()
+        if visible_map ~= 0x1B1800 and visible_map ~= 0x1B1A30 then
+            print(string.format("FMV_SMOKE_FAIL map_pointer=%08X", visible_map))
+            machine:exit()
+            return
         end
+        for position = 0, 279 do
+            if space:read_u16(visible_map + position * 2) >= 32768 then
+                print(string.format("FMV_SMOKE_FAIL map_slot position=%d", position))
+                machine:exit()
+                return
+            end
+        end
+        print(string.format(
+            "FMV_SMOKE_OK frame=%d playback_fields=%d late_fields=%d sectors=%d buffered=%d paused=%d audio_reply=%d audio_write=%d audio_upload=%d",
+            current, host_frame - play_start_host, space:read_u32(0x10004C),
+            space:read_u32(0x100020), space:read_u16(0x100012),
+            space:read_u8(0x100008), space:read_u8(0x100005),
+            space:read_u32(0x100034), space:read_u32(0x100038)))
+        machine.video:snapshot()
         machine:exit()
         return
     end
