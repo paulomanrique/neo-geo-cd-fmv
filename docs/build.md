@@ -74,7 +74,7 @@ python3 tools/export_native_video.py build/generated build/preview.mkv
 ```
 
 The exporter checks frame and audio CRCs, record boundaries, cache writes,
-and references against the decoder's previous-visible-map contract. Its RGB
+and differential maps against the decoder's CPU-baseline validity contract. Its RGB
 preview uses the reference renderer's palette model; it is not an emulator
 capture or a model of an analog display. Audio uses a WAV rate rounded to
 18,519 Hz rather than the chip's fractional rate.
@@ -90,6 +90,8 @@ python3 tools/compare_native_streams.py input.mp4 \
 The report includes displayed RGB error, Oklab error, and the 95th percentile
 of per-frame Oklab error. It measures complete frames, including tiles that
 the encoder chose not to update.
+Add `--require-no-regression` to fail the comparison if either mean or P95
+displayed Oklab error increases.
 
 For a known frame, compare an emulator's native-resolution PNG to the stream:
 
@@ -102,15 +104,39 @@ Disable shaders and scaling in the captured image. `--overscan 8` accepts a
 conversion may require an explicit `--max-mean-error` tolerance. This check is
 separate from source fidelity: it checks that playback matches authored data.
 
-`--metric rgb --palette-stability 0` on the encoder disables the new perceptual
-selection and palette-retention policy for controlled experiments. Frame byte
-budgets and the 64-tile upload ceiling are independent of these options.
+Encoder experiment switches:
+
+| Option | Purpose |
+|---|---|
+| `--palette-fitter rgb` | Use median-cut without Oklab palette refinement |
+| `--metric rgb` | Rank tile changes and match palette indices using RGB distance |
+| `--palette-stability 0` | Disable retention of previous palette colors |
+| `--no-full-cache` | Limit reuse to the previous visible frame |
+| `--no-differential-maps` | Always emit the full 560-byte map |
+| `--denoise 0` | Disable adaptive preprocessing |
+| `--denoise auto` | Default: trial two strengths against unfiltered group output |
+| `--denoise 1` / `--denoise 2` | Trial only one strength; quality guards still apply |
+
+These switches are for controlled comparisons, not byte-identical reproduction
+of older encoders. All retain the 64-upload ceiling and five-sector cadence.
 
 Run the offline regression checks without media or a BIOS:
 
 ```sh
 make check PYTHON=.venv/bin/python
 ```
+
+The media-free cache stress fixture forces repeated eviction in a 16-slot
+offline working set while retaining the real stream and hardware slot IDs:
+
+```sh
+python3 tests/create_cache_stress.py build/cache-stress/generated
+```
+
+Its generated files can replace `build/generated/` for a separate test-disc
+build and MAME verification. Preserve normal generated media first. The test
+specifically covers historical references, same-frame aliases, recycled IDs,
+and subsequent independent or differential updates.
 
 Analyze codec candidates on any set of clips:
 
@@ -148,6 +174,7 @@ For clips shorter than 1,801 frames, verification captures the last frame
 instead. The capture is compared with the authored stream using a default
 mean RGB tolerance of 1.0/255 for palette-conversion differences. Override
 `MAME_MAX_MEAN_ERROR` only when using a different documented color model.
+Set `FMV_TARGET_FRAME` to capture and check a specific intermediate frame.
 
 ## Emulator notes
 

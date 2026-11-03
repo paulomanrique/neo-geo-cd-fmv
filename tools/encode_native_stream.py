@@ -29,6 +29,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from perceptual import oklab, squared_error
+import palette_fit
 
 
 WIDTH = 320
@@ -189,6 +190,7 @@ def quantize_group(
     *,
     metric: str = "oklab",
     stability: float = 0.02,
+    fitter: str = "oklab",
 ) -> tuple[list[np.ndarray], list[list[tuple[int, int, int]]]]:
     indexed = [np.zeros((HEIGHT, WIDTH), dtype=np.uint8) for _ in frames]
     palettes: list[list[tuple[int, int, int]]] = []
@@ -211,18 +213,15 @@ def quantize_group(
             raw_palette.extend([0] * (45 - len(raw_palette)))
             colors = [tuple(raw_palette[i * 3 : i * 3 + 3]) for i in range(15)]
             current = np.asarray(image, dtype=np.uint8)
+            if fitter == "oklab":
+                colors = palette_fit.fit(combined, colors)
+                current = palette_fit.assign(combined, colors)
 
             palette_id = py * PALETTE_COLUMNS + px
             if previous_palettes is not None:
                 old = previous_palettes[palette_id]
                 if stability > 0:
-                    fixed = Image.new("P", (1, 1))
-                    repeated = [old[i % 15] for i in range(256)]
-                    fixed.putpalette([c for color in repeated for c in color])
-                    old_indices = np.asarray(
-                        Image.fromarray(combined).quantize(palette=fixed, dither=Image.Dither.NONE),
-                        dtype=np.uint8,
-                    ) % 15
+                    old_indices = palette_fit.assign(combined, old)
                     old_rgb = np.asarray(old, dtype=np.uint8)[old_indices]
                     new_rgb = np.asarray(colors, dtype=np.uint8)[current]
                     if squared_error(combined, old_rgb).mean() <= (
@@ -264,26 +263,19 @@ def palette_bytes(palettes: list[list[tuple[int, int, int]]]) -> bytes:
 
 
 def native_tile(indexed: np.ndarray, tx: int, ty: int) -> bytes:
-    tile = indexed[ty * TILE : (ty + 1) * TILE, tx * TILE : (tx + 1) * TILE]
-    encoded = bytearray()
-    for half in (1, 0):
-        for y in range(TILE):
-            pixels = tile[y, half * 8 : half * 8 + 8]
-            for plane in (1, 0, 3, 2):
-                value = 0
-                for x, pixel in enumerate(pixels):
-                    value |= ((int(pixel) >> plane) & 1) << x
-                encoded.append(value)
-    assert len(encoded) == 128
-    return bytes(encoded)
+    tile = indexed[ty * TILE:(ty + 1) * TILE, tx * TILE:(tx + 1) * TILE]
+    lanes = (tile[..., None] >> np.array([1, 0, 3, 2], dtype=np.uint8)) & 1
+    packed = np.packbits(lanes, axis=1, bitorder="little")
+    return packed[:, ::-1, :].transpose(1, 0, 2).tobytes()
 
 
 def native_tiles(indexed: np.ndarray) -> list[bytes]:
-    return [
-        native_tile(indexed, tx, ty)
-        for ty in range(TILES_Y)
-        for tx in range(TILES_X)
-    ]
+    tiles = indexed.reshape(TILES_Y, TILE, TILES_X, TILE).transpose(0, 2, 1, 3)
+    tiles = tiles.reshape(TILES, TILE, TILE)
+    lanes = (tiles[..., None] >> np.array([1, 0, 3, 2], dtype=np.uint8)) & 1
+    packed = np.packbits(lanes, axis=2, bitorder="little")
+    packed = packed[:, :, ::-1, :].transpose(0, 2, 1, 3).reshape(TILES, 128)
+    return [tile.tobytes() for tile in packed]
 
 
 def packbits(data: bytes) -> bytes:
@@ -577,6 +569,10 @@ def main() -> int:
     parser.add_argument("--metric", choices=("rgb", "oklab"), default="oklab")
     parser.add_argument("--palette-stability", type=float, default=0.02,
                         help="relative palette-error tolerance for keeping existing colors; 0 disables")
+    parser.add_argument("--palette-fitter", choices=("rgb", "oklab"), default="oklab")
+    parser.add_argument("--full-cache", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--differential-maps", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--denoise", choices=("auto", "0", "1", "2"), default="auto")
     args = parser.parse_args()
     if not 0 <= args.palette_stability <= 1:
         parser.error("--palette-stability must be between 0 and 1")
@@ -593,219 +589,33 @@ def main() -> int:
     future_audio = adpcm[PCM_PRELOAD_BYTES:]
     (args.output / "AUDIO0.PCM").write_bytes(preload)
 
-    allocator = SlotAllocator()
-    previous_indexed = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-    previous_native = [bytes(128)] * TILES
-    previous_map = [0] * TILES
-    previous_palettes = None
+    from video_encoder import VideoEncoder, encode_group
+
+    encoder = VideoEncoder(args, future_audio)
     stream = bytearray()
-    group: list[np.ndarray] = []
-    encoded_frame = 0
-    total_supplies = 0
-    peak_supplies = 0
-    total_used = 0
-    peak_used = 0
-    total_absolute_error = 0
-    total_perceptual_error = 0.0
-    palette_updates = 0
-    previous_packed_palette = None
-    mode_counts = {str(mode): 0 for mode in range(4)}
-
-    def consume(rgb_frames: list[np.ndarray]) -> None:
-        nonlocal previous_indexed, previous_native, previous_map
-        nonlocal previous_palettes, encoded_frame, total_supplies
-        nonlocal peak_supplies, total_used, peak_used, total_absolute_error
-        nonlocal total_perceptual_error, palette_updates, previous_packed_palette
-
-        indexed_frames, palettes = quantize_group(
-            rgb_frames, previous_palettes, metric=args.metric, stability=args.palette_stability
-        )
-        previous_palettes = palettes
-        packed_palette = palette_bytes(palettes)
-        for group_index, (rgb, target_indexed) in enumerate(
-            zip(rgb_frames, indexed_frames, strict=True)
-        ):
-            target_native = native_tiles(target_indexed)
-            baseline_indexed = previous_indexed.copy()
-            current_map = previous_map.copy()
-
-            exact_previous: dict[bytes, int] = {}
-            for position, tile in enumerate(previous_native):
-                exact_previous.setdefault(tile, position)
-            for position, tile in enumerate(target_native):
-                reference = exact_previous.get(tile)
-                if reference is not None:
-                    ty, tx = divmod(position, TILES_X)
-                    source_y, source_x = divmod(reference, TILES_X)
-                    baseline_indexed[
-                        ty * TILE : (ty + 1) * TILE,
-                        tx * TILE : (tx + 1) * TILE,
-                    ] = previous_indexed[
-                        source_y * TILE : (source_y + 1) * TILE,
-                        source_x * TILE : (source_x + 1) * TILE,
-                    ]
-                    current_map[position] = previous_map[reference]
-
-            baseline_rgb = render_indexed(baseline_indexed, palettes)
-            target_rgb = render_indexed(target_indexed, palettes)
-            baseline_error = tile_error(rgb, baseline_rgb, args.metric)
-            target_error = tile_error(rgb, target_rgb, args.metric)
-
-            flags = int(packed_palette != previous_packed_palette)
-            palette_updates += flags
-            previous_packed_palette = packed_palette
-            fixed_bytes = VIDEO_HEADER_BYTES + (PALETTE_BYTES if flags else 0) + TILES * 2
-            candidates: list[tuple[float, float, int, bytes]] = []
-            for position, current in enumerate(target_native):
-                if current == previous_native[position] or current in exact_previous:
-                    continue
-                improvement = float(baseline_error[position]) - float(target_error[position])
-                if improvement <= 0:
-                    continue
-                mode, payload = best_supply(previous_native[position], current)
-                cost = 6 + len(payload) + (len(payload) & 1)
-                ty, tx = divmod(position, TILES_X)
-                is_center = (
-                    CENTER_PRIORITY_INSET <= tx < TILES_X - CENTER_PRIORITY_INSET
-                    and CENTER_PRIORITY_INSET <= ty < TILES_Y - CENTER_PRIORITY_INSET
-                )
-                priority = improvement / cost
-                if is_center:
-                    priority *= CENTER_PRIORITY_NUM / CENTER_PRIORITY_DEN
-                candidates.append(
-                    (priority, improvement, position, bytes((mode,)) + payload)
-                )
-            candidates.sort(reverse=True)
-
-            primary_supplies: list[Supply] = []
-            continuation_supplies: list[Supply] = []
-            primary_used = fixed_bytes
-            continuation_used = 0
-            visible = set(previous_map)
-            for _, _, position, encoded in candidates:
-                mode = encoded[0]
-                payload = encoded[1:]
-                cost = 6 + len(payload) + (len(payload) & 1)
-                if len(primary_supplies) + len(continuation_supplies) >= MAX_SUPPLIES:
-                    continue
-                if primary_used + cost <= VIDEO_PACKET_BYTES:
-                    destination_list = primary_supplies
-                    primary_used += cost
-                elif continuation_used + cost <= AUX_VIDEO_BYTES:
-                    destination_list = continuation_supplies
-                    continuation_used += cost
-                else:
-                    continue
-                destination = allocator.allocate(visible)
-                destination_list.append(Supply(position, destination, mode, payload))
-                current_map[position] = destination
-                ty, tx = divmod(position, TILES_X)
-                baseline_indexed[
-                    ty * TILE : (ty + 1) * TILE,
-                    tx * TILE : (tx + 1) * TILE,
-                ] = target_indexed[
-                    ty * TILE : (ty + 1) * TILE,
-                    tx * TILE : (tx + 1) * TILE,
-                ]
-
-            current_native: list[bytes] = []
-            for position in range(TILES):
-                ty, tx = divmod(position, TILES_X)
-                current_native.append(native_tile(baseline_indexed, tx, ty))
-            supplies = primary_supplies + continuation_supplies
-            for supply in supplies:
-                decoded = decode_supply(
-                    previous_native[supply.position], supply.mode, supply.payload
-                )
-                if decoded != target_native[supply.position]:
-                    raise RuntimeError("tile command failed reference round-trip")
-                if current_native[supply.position] != decoded:
-                    raise RuntimeError("reconstructed state disagrees with tile command")
-
-            primary_body = bytearray()
-            if flags:
-                primary_body.extend(packed_palette)
-            primary_body.extend(struct.pack(f">{TILES}H", *current_map))
-            for supply in primary_supplies:
-                primary_body.extend(supply.encode())
-                mode_counts[str(supply.mode)] += 1
-            continuation_body = bytearray()
-            for supply in continuation_supplies:
-                continuation_body.extend(supply.encode())
-                mode_counts[str(supply.mode)] += 1
-            used = VIDEO_HEADER_BYTES + len(primary_body) + len(continuation_body)
-            if VIDEO_HEADER_BYTES + len(primary_body) > VIDEO_PACKET_BYTES:
-                raise RuntimeError("primary video packet exceeded four sectors")
-            if len(continuation_body) > AUX_VIDEO_BYTES:
-                raise RuntimeError("video continuation exceeded auxiliary-sector tail")
-            crc = zlib.crc32(primary_body)
-            crc = zlib.crc32(continuation_body, crc)
-            header = struct.pack(
-                ">4sHHHHHHIHH8s",
-                b"NTV1", encoded_frame, flags, used, len(supplies),
-                VIDEO_HEADER_BYTES + (PALETTE_BYTES if flags else 0),
-                VIDEO_HEADER_BYTES + (PALETTE_BYTES if flags else 0) + TILES * 2,
-                crc, len(primary_supplies),
-                VIDEO_PACKET_BYTES + AUX_AUDIO_REGION_BYTES, bytes(8),
-            )
-            video_packet = (header + primary_body).ljust(VIDEO_PACKET_BYTES, b"\0")
-
-            audio_start = (encoded_frame * ADPCM_RATE_NUM) // (
-                FPS * ADPCM_RATE_DEN * 2
-            )
-            audio_end = ((encoded_frame + 1) * ADPCM_RATE_NUM) // (
-                FPS * ADPCM_RATE_DEN * 2
-            )
-            audio_payload = future_audio[audio_start:audio_end]
-            if len(audio_payload) > AUX_AUDIO_REGION_BYTES - AUX_HEADER_BYTES:
-                raise RuntimeError("audio payload exceeded auxiliary sector")
-            aux_header = struct.pack(
-                ">4sHHI", b"NTA1", encoded_frame, len(audio_payload),
-                zlib.crc32(audio_payload),
-            )
-            aux_packet = (
-                (aux_header + audio_payload).ljust(AUX_AUDIO_REGION_BYTES, b"\x08")
-                + continuation_body.ljust(AUX_VIDEO_BYTES, b"\0")
-            )
-            stream.extend(video_packet)
-            stream.extend(aux_packet)
-
-            rendered = render_indexed(baseline_indexed, palettes)
-            total_absolute_error += int(
-                np.abs(rgb.astype(np.int16) - rendered.astype(np.int16)).sum()
-            )
-            total_perceptual_error += float(squared_error(rgb, rendered).sum())
-            total_supplies += len(supplies)
-            peak_supplies = max(peak_supplies, len(supplies))
-            total_used += used
-            peak_used = max(peak_used, used)
-            previous_indexed = baseline_indexed
-            previous_native = current_native
-            previous_map = current_map
-            encoded_frame += 1
-            if encoded_frame % 100 == 0:
-                print(
-                    f"encoded {encoded_frame}/{frame_count} frames; "
-                    f"last={used} bytes/{len(supplies)} uploads",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-    source_count = 0
+    group = []
     for frame in video_frames(args.input, frame_count):
         group.append(frame)
-        source_count += 1
-        if len(group) == PALETTE_HOLD:
-            consume(group)
+        if len(group) == PALETTE_HOLD or encoder.number + len(group) == frame_count:
+            encoder, records = encode_group(encoder, group)
+            stream.extend(b"".join(record.block for record in records))
             group = []
-        if source_count >= frame_count:
-            break
-    if group:
-        consume(group)
+            if encoder.number % 100 == 0:
+                print(f"encoded {encoder.number}/{frame_count} frames; "
+                      f"cache_hits={encoder.stats['historical_cache_hits']}; "
+                      f"denoised_groups={encoder.stats['denoised_groups']}",
+                      file=sys.stderr, flush=True)
+    encoded_frame = encoder.number
     if encoded_frame != frame_count:
-        raise RuntimeError(
-            f"ffmpeg produced {encoded_frame} frames; ffprobe promised {frame_count}"
-        )
+        raise RuntimeError(f"ffmpeg produced {encoded_frame} frames; expected {frame_count}")
+    total_used = encoder.stats["total_used"]
+    peak_used = encoder.stats["peak_used"]
+    total_supplies = encoder.stats["total_supplies"]
+    peak_supplies = encoder.stats["peak_supplies"]
+    total_absolute_error = encoder.stats["total_absolute_error"]
+    total_perceptual_error = encoder.stats["total_perceptual_error"]
+    palette_updates = encoder.stats["palette_updates"]
+    mode_counts = encoder.mode_counts
 
     if len(stream) != frame_count * FRAME_BLOCK_BYTES:
         raise RuntimeError("stream does not contain exactly five sectors per frame")
@@ -836,6 +646,16 @@ def main() -> int:
         "selection_metric": args.metric,
         "palette_stability": args.palette_stability,
         "palette_updates": palette_updates,
+        "palette_fitter": args.palette_fitter,
+        "full_cache": args.full_cache,
+        "differential_maps": args.differential_maps,
+        "denoise": args.denoise,
+        "historical_cache_hits": encoder.stats["historical_cache_hits"],
+        "same_frame_cache_hits": encoder.stats["same_frame_cache_hits"],
+        "differential_map_frames": encoder.stats["differential_maps"],
+        "average_map_bytes": encoder.stats["map_bytes"] / frame_count,
+        "denoised_groups": encoder.stats["denoised_groups"],
+        "denoise_trials": encoder.stats["denoise_trials"],
         "center_priority_inset_tiles": CENTER_PRIORITY_INSET,
         "center_priority_multiplier": CENTER_PRIORITY_NUM / CENTER_PRIORITY_DEN,
         "mode_counts": mode_counts,

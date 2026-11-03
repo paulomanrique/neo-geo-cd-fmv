@@ -22,6 +22,9 @@ SUPPLY_POSITIONS        equ $1B1EE0
 SUPPLY_DESTINATIONS     equ $1B1FA0
 FRAME_INPUT             equ $1B2100
 BASELINE_FLAGS          equ $1B4900
+TILE_VALID_A            equ $1B4A18
+TILE_VALID_B            equ TILE_VALID_A+280
+PREPARED_MAP            equ TILE_VALID_B+280
 SLOT_TO_POSITION        equ $1B5000
 
 RAMSTART                equ $100000
@@ -111,6 +114,8 @@ AudioUploadOffset:      ds.l 1
 DecoderBusy             equ $10003C
 PrimarySupplyCount      equ $10003E
 LateFields              equ $10004C
+PreviousValidPointer    equ $100050
+CurrentValidPointer     equ $100054
 
     org $0000
 
@@ -316,6 +321,13 @@ Start:
     move.l #CURRENT_TILES,CurrentTilesPointer
     move.l #PREVIOUS_MAP,PreviousMapPointer
     move.l #CURRENT_MAP,CurrentMapPointer
+    move.l #TILE_VALID_A,PreviousValidPointer
+    move.l #TILE_VALID_B,CurrentValidPointer
+    lea TILE_VALID_A,a0
+    move.w #559,d7
+.valid_black:
+    move.b #1,(a0)+
+    dbra d7,.valid_black
     move.w #$FFFF,CurrentFrame
 
     jsr BIOSF_LSP_1ST
@@ -550,6 +562,33 @@ DecodePreparedFrame:
     moveq #0,d0
     move.w 12(a6),d0
     lea 0(a6,d0.l),a0
+    btst #1,7(a6)
+    beq .full_map
+    ; Start a differential map from N-1, retaining N-2 copy hints first.
+    movea.l PreviousMapPointer,a1
+    lea PREPARED_MAP,a2
+    move.w #VIDEO_TILES_PER_FRAME-1,d7
+.map_seed:
+    move.w (a1)+,(a2)+
+    dbra d7,.map_seed
+    move.w (a0)+,d7
+    cmpi.w #VIDEO_TILES_PER_FRAME,d7
+    bhi DecoderFatal
+    tst.w d7
+    beq .delta_ready
+    subq.w #1,d7
+    lea PREPARED_MAP,a2
+.map_delta:
+    moveq #0,d0
+    move.w (a0)+,d0
+    cmpi.w #VIDEO_TILES_PER_FRAME,d0
+    bhs DecoderFatal
+    add.w d0,d0
+    move.w (a0)+,0(a2,d0.w)
+    dbra d7,.map_delta
+.delta_ready:
+    lea PREPARED_MAP,a0
+.full_map:
     movea.l CurrentMapPointer,a1
     lea BASELINE_FLAGS,a2
     move.w #VIDEO_TILES_PER_FRAME-1,d7
@@ -583,11 +622,31 @@ DecodePreparedFrame:
 .baseline_tile:
     moveq #0,d0
     move.w (a0)+,d0
+    movea.l CurrentValidPointer,a3
     tst.b (a6)+
-    beq .baseline_next
+    sne d4
+    ; A recycled slot can equal N-2's ID while containing different pixels.
+    ; Require a valid N-1 source before trusting an N-2 copy hint.
     add.w d0,d0
     moveq #0,d1
     move.w 0(a1,d0.l),d1
+    cmpi.w #VIDEO_TILES_PER_FRAME,d1
+    bhs .baseline_invalid
+    movea.l PreviousValidPointer,a2
+    tst.b 0(a2,d1.w)
+    beq .baseline_invalid
+    move.l d1,d2
+    add.w d2,d2
+    movea.l PreviousMapPointer,a2
+    move.w -2(a0),d0
+    cmp.w 0(a2,d2.w),d0
+    bne .baseline_invalid
+    tst.b d4
+    bne .baseline_required
+    tst.b 0(a3,d6.w)
+    bne .baseline_next
+.baseline_required:
+    move.b #1,0(a3,d6.w)
     lsl.l #7,d1
     lea 0(a4,d1.l),a2
     move.l d6,d2
@@ -597,6 +656,10 @@ DecodePreparedFrame:
 .baseline_copy:
     move.l (a2)+,(a3)+
     dbra d5,.baseline_copy
+    bra .baseline_next
+.baseline_invalid:
+    movea.l CurrentValidPointer,a3
+    clr.b 0(a3,d6.w)
 .baseline_next:
     addq.w #1,d6
     dbra d7,.baseline_tile
@@ -630,6 +693,16 @@ DecodePreparedFrame:
     move.b (a0)+,d4             ; mode
     moveq #0,d5
     move.b (a0)+,d5             ; payload length
+    cmpi.w #VIDEO_TILES_PER_FRAME,d6
+    bhs DecoderFatal
+    cmpi.b #1,d4
+    bls .independent_tile
+    movea.l PreviousValidPointer,a6
+    tst.b 0(a6,d6.w)
+    beq DecoderFatal
+.independent_tile:
+    movea.l CurrentValidPointer,a6
+    move.b #1,0(a6,d6.w)
     move.l d6,d0
     lsl.l #7,d0
     movea.l CurrentTilesPointer,a1
@@ -914,6 +987,9 @@ PresentPreparedFrame:
     move.l PreviousMapPointer,d0
     move.l CurrentMapPointer,PreviousMapPointer
     move.l d0,CurrentMapPointer
+    move.l PreviousValidPointer,d0
+    move.l CurrentValidPointer,PreviousValidPointer
+    move.l d0,CurrentValidPointer
     movem.l (a7)+,d0-d7/a0-a3
     rts
 

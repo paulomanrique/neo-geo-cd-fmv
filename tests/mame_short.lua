@@ -40,6 +40,13 @@ emu.register_frame_done(function()
     end
 
     if play_start_host ~= nil and current >= target_frame then
+        local fields = host_frame - play_start_host
+        local expected_fields = math.floor(current * 591856 / 150000)
+        if math.abs(fields - expected_fields) > 1 then
+            print(string.format("FMV_SMOKE_FAIL timing fields=%d expected=%d", fields, expected_fields))
+            machine:exit()
+            return
+        end
         local visible_map = space:read_u32(0x10002C)
         if visible_map ~= 0x1B1800 and visible_map ~= 0x1B1A30 then
             print(string.format("FMV_SMOKE_FAIL map_pointer=%08X", visible_map))
@@ -55,7 +62,7 @@ emu.register_frame_done(function()
         end
         print(string.format(
             "FMV_SMOKE_OK frame=%d playback_fields=%d late_fields=%d sectors=%d buffered=%d paused=%d audio_reply=%d audio_write=%d audio_upload=%d",
-            current, host_frame - play_start_host, space:read_u32(0x10004C),
+            current, fields, space:read_u32(0x10004C),
             space:read_u32(0x100020), space:read_u16(0x100012),
             space:read_u8(0x100008), space:read_u8(0x100005),
             space:read_u32(0x100034), space:read_u32(0x100038)))

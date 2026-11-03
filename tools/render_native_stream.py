@@ -4,22 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import struct
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from encode_native_stream import (
-    FRAME_BLOCK_BYTES,
-    HEIGHT,
-    PALETTE_BYTES,
-    TILE,
-    TILES,
-    TILES_X,
-    VIDEO_HEADER_BYTES,
-    decode_supply,
-)
+from encode_native_stream import TILE
 
 
 def component(word: int, high_shift: int, low_shift: int) -> int:
@@ -54,49 +44,18 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
 
-    previous = [bytes(128)] * TILES
-    cache = {0: bytes(128)}
-    palettes = [(0, 0, 0)] * (20 * 16)
-    with args.stream.open("rb") as source:
-        for frame_number in range(args.frame + 1):
-            block = source.read(FRAME_BLOCK_BYTES)
-            if len(block) != FRAME_BLOCK_BYTES:
-                raise RuntimeError("frame is outside the stream")
-            (
-                magic, encoded, flags, used, count, map_offset, supply_offset,
-                _, primary_count, continuation_offset, _,
-            ) = struct.unpack_from(">4sHHHHHHIHH8s", block)
-            if magic != b"NTV1" or encoded != frame_number:
-                raise RuntimeError("stream frame mismatch")
-            if continuation_offset == 0:  # version-1 streams before aux reuse
-                primary_count = count
-            if flags & 1:
-                words = struct.unpack_from(">320H", block, VIDEO_HEADER_BYTES)
-                palettes = [palette_color(word) for word in words]
-            tile_map = struct.unpack_from(f">{TILES}H", block, map_offset)
-            current = [cache.get(slot, bytes(128)) for slot in tile_map]
-            offset = supply_offset
-            for supply_index in range(count):
-                if supply_index == primary_count:
-                    offset = continuation_offset
-                position, destination, mode, length = struct.unpack_from(">HHBB", block, offset)
-                payload = block[offset + 6 : offset + 6 + length]
-                decoded = decode_supply(previous[position], mode, payload)
-                current[position] = decoded
-                cache[destination] = decoded
-                offset += 6 + length + (length & 1)
-            previous = current
+    from itertools import islice
+    from export_native_video import frames
 
-    rgb = np.zeros((HEIGHT, TILES_X * TILE, 3), dtype=np.uint8)
-    for position, tile in enumerate(previous):
-        ty, tx = divmod(position, TILES_X)
-        palette_id = (ty // 4) * 5 + (tx // 4)
-        indices = tile_indices(tile)
-        colors = np.asarray(palettes[palette_id * 16 : palette_id * 16 + 16], dtype=np.uint8)
-        rgb[ty * TILE : (ty + 1) * TILE, tx * TILE : (tx + 1) * TILE] = colors[indices]
+    if args.frame < 0:
+        parser.error("frame must be nonnegative")
+    rgb = next(islice(frames(args.stream), args.frame, args.frame + 1), None)
+    if rgb is None:
+        parser.error("frame is outside the stream")
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgb, "RGB").save(args.output)
-    print(f"rendered frame {args.frame} ({used} bytes, {count} supplies)")
+    print(f"rendered frame {args.frame}")
     return 0
 
 

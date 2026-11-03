@@ -1,6 +1,6 @@
 # Native-tile stream format
 
-Date: 2026-08-15
+Date: 2026-11-03
 
 ## Physical schedule
 
@@ -24,7 +24,7 @@ All integers are big-endian. The 32-byte header is:
 offset  size  field
 0x00       4  "NTV1"
 0x04       2  frame number
-0x06       2  flags (bit 0: palette payload present)
+0x06       2  flags (bit 0: palettes; bit 1: differential map)
 0x08       2  used video bytes including header
 0x0A       2  supply count (0..96)
 0x0C       2  tile-map offset
@@ -41,8 +41,14 @@ total. Palettes are spatially assigned in a 5×4 grid and reconsidered every fou
 frames. Existing colors are retained when their Oklab error is within 2% of
 the new fit, and a payload is emitted only when the packed palettes change.
 
-The map contains 280 unsigned 16-bit graphics-cache slot IDs in row-major
-order. It is followed by the primary supply records. Remaining records begin
+Without flag bit 1, the map contains 280 unsigned 16-bit graphics-cache slot
+IDs in row-major order. With bit 1, it begins with a 16-bit change count,
+followed by that many `(position, slot)` pairs of unsigned 16-bit words.
+Positions must be strictly increasing and below 280. The decoder seeds the
+map from the preceding frame before applying these entries. An unchanged map
+costs two bytes; at 140 or more changes the encoder chooses the full map.
+The supply-list offset is immediately after the chosen map representation.
+It is followed by the primary supply records. Remaining records begin
 at the continuation offset in the fifth sector. A record never straddles the
 boundary.
 
@@ -68,7 +74,22 @@ Modes are:
 The offline encoder reconstructs every packet through the reference decoder
 before accepting it. It also owns the circular 32,768-slot graphics-RAM cache;
 slot zero is permanent black, and an allocation may never replace a slot still
-referenced by the visible map.
+referenced by the visible or prepared map. References may address any still
+resident pattern, including a supply elsewhere in the same frame. Slot reuse
+must invalidate the evicted pattern's offline lookup entry.
+
+The two CPU tile buffers each have a 280-byte validity array. A historical
+reference missing from valid previous CPU tiles does not require a readback:
+it displays the existing graphics slot and leaves that CPU position invalid.
+Modes 2 and 3 require a valid previous CPU position. Modes 0 and 1 reconstruct
+independently and restore validity. A duplicate map slot uses the last matching
+previous position, matching the 68000 lookup table. The N-2 copy optimization
+requires both a valid matching N-1 source and a valid N-2 buffer with the same
+slot ID. A matching ID alone is insufficient after that slot is recycled.
+
+The updated player accepts earlier full-map streams. Streams using historical
+references or differential maps require the updated player; the original
+player cannot reconstruct their CPU baselines or map representation.
 
 ## Auxiliary audio packet
 
@@ -111,6 +132,8 @@ $1B1C60-$1B1EDF   prepared palettes
 $1B1EE0-$1B20FF   supply position/destination lists
 $1B2100-$1B48FF   five-sector frame input
 $1B4900-$1B4A17   N-2 baseline-copy flags
+$1B4A18-$1B4C47   alternating CPU-baseline validity arrays
+$1B4C48-$1B4E77   differential-map scratch
 $1B5000...        graphics-slot to previous-position lookup
 ```
 
@@ -118,7 +141,7 @@ Sprite uploads are bounded to 64 tiles per frame so the added visual data does
 not consume the CPU headroom that keeps presentation cadence smooth. Before
 reconstructing a baseline tile, the decoder compares its cache
 slot with the slot already held by the alternating N-2 software buffer and
-skips the 128-byte copy when they match. The player prepares one frame ahead
+skips the 128-byte copy when they match and that CPU copy is valid. The player prepares one frame ahead
 and presents only a completely decoded and uploaded map.
 
 The offline selector ranks candidates by visual-error reduction per byte and

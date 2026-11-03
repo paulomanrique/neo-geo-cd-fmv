@@ -30,7 +30,10 @@ bytes in Neo Geo sprite bitplane order. The screen uses a fixed 5×4 grid of
 visible colors; palette entries are matched across updates so indices remain as
 stable as possible.
 
-Palettes are trained over groups of four frames. A region keeps its previous
+Palettes are trained over groups of four frames. Median-cut seeds a weighted
+Oklab fit whose centroids are projected onto representable 5-bit colors; the
+fit is checked against the original RGB pixels before it replaces the seed.
+A region keeps its previous
 palette when its Oklab error is within 2% of the newly fitted palette's error.
 Unchanged palette payloads are omitted. Palette indices are matched using
 Oklab distance. Within each frame the encoder
@@ -38,20 +41,43 @@ constructs the image the decoder would actually display, not an ideal target
 that may exceed the packet budget. Future deltas are always computed from this
 reconstructed state.
 
+Adaptive preprocessing trials apply a small median filter only where a pixel
+differs from its neighborhood by at most 8 or 16 channel levels. High-contrast
+edges are left untouched. Each trial encodes the complete four-frame group
+from the same state, including cache allocation, map bytes, and upload limits.
+It is selected only if neither mean nor 95th-percentile displayed Oklab error
+regresses against the unfiltered group. Original RGB frames remain the scoring
+reference. This is a local group guarantee, not a whole-film quality promise.
+
 ## Graphics RAM as a dictionary
 
 Four MiB of graphics RAM provide 32,768 native tile slots. Slot zero is a
 permanent black tile. The offline allocator assigns every uploaded tile a cache
-slot and never overwrites a slot referenced by the visible map.
+slot and never overwrites a slot referenced by the visible or prepared map.
+Eviction removes the overwritten slot from the exact-pattern lookup.
 
 Before sending pixel data, the encoder checks whether the exact target tile was
-visible in the preceding frame. A hit becomes a map reference and costs no
-graphics upload. A miss is represented by the smallest of:
+visible in the preceding frame, then checks the complete resident dictionary.
+Duplicates first uploaded in the current frame share that upload too. A hit
+becomes a map reference and costs no graphics upload. A miss is represented by
+the smallest valid encoding:
 
 - `RAW`: 128 native bytes;
 - `PACKBITS`: byte-oriented PackBits;
 - `XOR_PREVIOUS`: XOR against the same screen position, then zero-run RLE;
 - `PLANES_PREVIOUS`: a four-bit changed-plane mask plus 32 bytes per plane.
+
+A historical cache reference can be displayed without copying its pixels back
+into program RAM. The encoder and 68000 track which software positions have
+valid pixels. XOR and plane updates are forbidden without a valid previous
+CPU baseline; the first subsequent upload then uses RAW or PackBits. This
+avoids graphics-RAM readbacks and keeps historical reuse independent of CPU
+tile-buffer capacity.
+
+Maps use either 560 raw bytes or a sorted list of changed position/slot pairs,
+whichever is smaller. Map growth is included while selecting supplies, so
+savings become usable video budget within the same five sectors. The player
+still commits the complete prepared sprite map during presentation.
 
 Candidates are ranked by squared Oklab error reduction per encoded byte. Positions
 inside a one-tile border receive a 1.25× score, preserving detail in the center
@@ -113,6 +139,8 @@ YM2610 decoder reset when a channel starts.
 | `$1B1EE0–$1B20FF` | Supply position/destination tables |
 | `$1B2100–$1B48FF` | Five-sector frame input |
 | `$1B4900–$1B4A17` | Baseline-copy flags |
+| `$1B4A18–$1B4C47` | Two 280-byte CPU-baseline validity arrays |
+| `$1B4C48–$1B4E77` | Differential-map reconstruction scratch |
 | `$1B5000…` | Graphics-slot-to-position lookup |
 
 ## Current constraints

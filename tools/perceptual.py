@@ -23,3 +23,19 @@ def oklab(rgb: np.ndarray) -> np.ndarray:
 
 def squared_error(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     return np.square(oklab(left) - oklab(right)).sum(axis=-1)
+
+
+def rgb_from_oklab(lab: np.ndarray) -> np.ndarray:
+    lms = np.asarray(lab) @ np.array([
+        [1, .3963377774, .2158037573],
+        [1, -.1055613458, -.0638541728],
+        [1, -.0894841775, -1.2914855480],
+    ]).T
+    linear = (lms ** 3) @ np.array([
+        [4.0767416621, -3.3077115913, .2309699292],
+        [-1.2684380046, 2.6097574011, -.3413193965],
+        [-.0041960863, -.7034186147, 1.7076147010],
+    ]).T
+    linear = np.clip(linear, 0, 1)
+    return np.where(linear <= .0031308, linear * 12.92,
+                    1.055 * linear ** (1 / 2.4) - .055) * 255

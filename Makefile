@@ -18,7 +18,7 @@ NAME := neo-geo-cd-fmv
 
 all: $(DIST)/$(NAME).cue $(DIST)/$(NAME).bin
 
-$(GENERATED)/video.json: $(INPUT_VIDEO) tools/encode_native_stream.py tools/perceptual.py
+$(GENERATED)/video.json: $(INPUT_VIDEO) tools/encode_native_stream.py tools/perceptual.py tools/palette_fit.py tools/video_encoder.py
 	mkdir -p $(GENERATED)
 	$(PYTHON) tools/encode_native_stream.py $(INPUT_VIDEO) $(GENERATED)
 
@@ -91,6 +91,7 @@ verify: all
 check:
 	$(PYTHON) tests/test_audio_banks.py
 	$(PYTHON) tests/test_perceptual.py
+	$(PYTHON) tests/test_advanced_codec.py
 
 clean:
 	rm -rf build dist src/main.bin src/main.lst src/main.p \

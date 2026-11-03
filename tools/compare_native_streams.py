@@ -16,12 +16,14 @@ from export_native_video import frames
 from perceptual import squared_error
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--require-no-regression", action="store_true",
+                        help="fail if mean or P95 displayed Oklab error increases")
     args = parser.parse_args()
     source_hash = hashlib.sha256(args.source.read_bytes()).hexdigest()
     metadata_by_name = {}
@@ -59,10 +61,14 @@ def main() -> None:
         report[key + "_reduction_percent"] = (
             100 * (before - report["after"][key]) / before if before else 0.0
         )
+    passed = all(report["after"][key] <= report["before"][key] + 1e-12
+                 for key in ("mean_squared_oklab_error", "p95_frame_oklab_error"))
+    report["no_perceptual_regression"] = passed
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
+    return int(args.require_no_regression and not passed)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

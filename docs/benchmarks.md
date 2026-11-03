@@ -1,5 +1,43 @@
 # Measured results
 
+## Additional 1,233-frame evaluation
+
+A separate 82.2-second clip was normalized with the same fit/pad geometry for
+all three encoders. These are full displayed-frame measurements from the same
+stream renderer, not encoder-only palette errors or results from the older
+3,432-frame corpus below.
+
+| Encoder | Mean RGB absolute error | Mean squared Oklab error | P95 frame Oklab error | Average uploads | Average used video bytes |
+|---|---:|---:|---:|---:|---:|
+| Original, corrected geometry | 3.78544 | 0.00360937 | 0.00823723 | 28.054 | 2,775.47 |
+| Perceptual selection and palette retention | 3.69598 | 0.00353487 | 0.00847944 | 22.036 | 2,494.61 |
+| Oklab palette fit, resident cache, differential maps, adaptive filtering | 2.75154 | 0.00159267 | 0.00472381 | 18.742 | 1,787.57 |
+
+Against the first perceptual version, the combined changes reduce mean Oklab
+error by 54.94%, RGB error by 25.55%, and P95 frame Oklab error by 44.29%.
+These are content-specific results, not guaranteed gains for arbitrary films.
+The optical rate remains 153,600 B/s: savings become additional payload
+headroom, not a smaller physical stream.
+
+The combined stream uses 1,200 differential maps, averaging 97.35 map bytes
+instead of 560. It reuses 3,869 historical tiles and collapses 432 same-frame
+duplicates. Adaptive filtering wins 75 four-frame groups under the local
+mean/P95 guards.
+
+MAME 0.289 checked the combined image at frames 800, 1,200, and 1,232. The final
+interval was 4,861 display fields with two late fields. Native captures had
+mean RGB differences of 0.413, 0.260, and 0.335 against authored frames, under
+the 1.0/255 palette-conversion tolerance. The updated player also passed the
+previous full-map stream through frame 1,232. No physical-console test is
+claimed.
+
+A media-free 96-frame fixture also passed MAME capture comparison after 281
+uploads through a deliberately restricted 16-slot working set. This forces
+repeated cache recycling independently of how much the development video
+happens to reuse, with a final mean RGB difference of 0.040/255.
+
+## Original 3,432-frame corpus
+
 These measurements come from a 3,432-frame, 228.8-second development corpus at
 320×224 and 15 fps. The media is not distributed and no source hashes are
 published. All image-error figures compare the RGB source with the encoder's

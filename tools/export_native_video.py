@@ -63,6 +63,7 @@ def frames(stream: Path):
     previous = [bytes(128)] * TILES
     cache = {0: bytes(128)}
     previous_map = (0,) * TILES
+    previous_valid = [True] * TILES
     palettes = np.zeros((20, 16, 3), dtype=np.uint8)
     palette_ids = np.array([(p // TILES_X // 4) * 5 + (p % TILES_X // 4)
                             for p in range(TILES)])
@@ -77,8 +78,8 @@ def frames(stream: Path):
             if magic != b"NTV1" or encoded != number:
                 raise ValueError(f"invalid frame header at {number}")
             expected_map = 32 + (640 if flags & 1 else 0)
-            if (flags & ~1 or map_offset != expected_map
-                    or supply_offset != map_offset + TILES * 2
+            if (flags & ~3 or map_offset != expected_map
+                    or not map_offset <= supply_offset <= VIDEO_PACKET_BYTES
                     or count > 96 or primary_count > count
                     or continuation != VIDEO_PACKET_BYTES + AUX_AUDIO_REGION_BYTES):
                 raise ValueError(f"invalid frame layout at {number}")
@@ -93,7 +94,23 @@ def frames(stream: Path):
                 palettes = np.array([palette_color(w) for w in
                                      struct.unpack_from(">320H", block, 32)],
                                     dtype=np.uint8).reshape(20, 16, 3)
-            tile_map = struct.unpack_from(f">{TILES}H", block, map_offset)
+            if flags & 2:
+                changed = struct.unpack_from(">H", block, map_offset)[0]
+                if changed > TILES or supply_offset != map_offset + 2 + changed * 4:
+                    raise ValueError(f"invalid differential map at {number}")
+                tile_map = list(previous_map)
+                last_position = -1
+                for entry in range(changed):
+                    position, slot = struct.unpack_from(">HH", block, map_offset + 2 + entry * 4)
+                    if not last_position < position < TILES:
+                        raise ValueError(f"unordered differential map at {number}")
+                    tile_map[position] = slot
+                    last_position = position
+                tile_map = tuple(tile_map)
+            else:
+                if supply_offset != map_offset + TILES * 2:
+                    raise ValueError(f"invalid full map at {number}")
+                tile_map = struct.unpack_from(f">{TILES}H", block, map_offset)
             if any(slot >= SPRITE_CACHE_TILES for slot in tile_map):
                 raise ValueError(f"invalid cache slot at {number}")
             current = [cache.get(slot, bytes(128)) for slot in tile_map]
@@ -116,6 +133,8 @@ def frames(stream: Path):
                     raise ValueError(f"invalid supply at frame {number}, record {index}")
                 positions.add(position)
                 destinations.add(destination)
+                if mode >= 2 and not previous_valid[position]:
+                    raise ValueError(f"delta without a valid CPU baseline at frame {number}")
                 payload = block[offset + 6 : offset + 6 + length]
                 current[position] = decode_supply(previous[position], mode, payload)
                 cache[destination] = current[position]
@@ -127,11 +146,13 @@ def frames(stream: Path):
             body = block[32:primary_end] + block[continuation:continuation_end]
             if used != 32 + len(body) or zlib.crc32(body) != checksum:
                 raise ValueError(f"invalid video size or CRC at frame {number}")
-            if any(slot not in previous_map and p not in positions
-                   for p, slot in enumerate(tile_map)):
-                raise ValueError(f"reference outside previous visible map at {number}")
             if any(slot not in cache for slot in tile_map):
                 raise ValueError(f"uninitialized cache reference at frame {number}")
+            previous_positions = {slot: p for p, slot in enumerate(previous_map)}
+            current_valid = [p in positions or (
+                slot in previous_positions and previous_valid[previous_positions[slot]])
+                for p, slot in enumerate(tile_map)]
+            current = [cache[slot] for slot in tile_map]
             indices = unpack_tiles(current)
             if number == 0:
                 for tile, unpacked in zip(current, indices, strict=True):
@@ -142,6 +163,7 @@ def frames(stream: Path):
                 0, 2, 1, 3, 4).reshape(224, 320, 3)
             previous = current
             previous_map = tile_map
+            previous_valid = current_valid
             number += 1
 
 

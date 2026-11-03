@@ -22,7 +22,7 @@ done
     --lba 24 --verify-iso "$ROOT/dist/$NAME.iso"
 "$PYTHON" "$ROOT/tests/test_audio_banks.py"
 
-FMV_TARGET_FRAME=$("$PYTHON" -c 'import json,sys; print(min(1800, json.load(open(sys.argv[1]))["frame_count"] - 1))' \
+FMV_TARGET_FRAME=$("$PYTHON" -c 'import json,os,sys; last=json.load(open(sys.argv[1]))["frame_count"]-1; target=int(os.environ.get("FMV_TARGET_FRAME", min(1800,last))); assert 0<=target<=last, "target frame is outside the clip"; print(target)' \
     "$ROOT/build/generated/video.json")
 export FMV_TARGET_FRAME
 
