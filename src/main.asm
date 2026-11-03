@@ -66,6 +66,8 @@ SCB1                    equ $0000
 SCB2                    equ $8000
 SCB3                    equ $8200
 SCB4                    equ $8400
+VIDEO_FIRST_SPRITE      equ 1
+VIDEO_TOP_SCANLINE      equ 16
 SPRITE_BANK_TILES       equ 8192
 SPRITE_UPLOAD_BURST     equ VIDEO_MAX_SUPPLIES
 PCM_UPLOAD_BURST        equ 192
@@ -890,7 +892,7 @@ PresentPreparedFrame:
     moveq #0,d0
     move.w d6,d0
     lsl.w #6,d0
-    addi.w #SCB1,d0
+    addi.w #SCB1+VIDEO_FIRST_SPRITE*64,d0
     move.w d0,VRAM_ADDR
     moveq #0,d0
     move.w d6,d0
@@ -934,19 +936,19 @@ SetupSprites:
     moveq #0,d0
 .column:
     move.w d0,d1
-    addi.w #SCB2,d1
+    addi.w #SCB2+VIDEO_FIRST_SPRITE,d1
     move.w d1,VRAM_ADDR
     move.w #$0FFF,VRAM_RW
     move.w d0,d1
-    addi.w #SCB3,d1
+    addi.w #SCB3+VIDEO_FIRST_SPRITE,d1
     move.w d1,VRAM_ADDR
-    move.w #$000E,VRAM_RW
+    ; The visible raster starts at scanline 16; sprite zero is not drawn.
+    move.w #((512-VIDEO_TOP_SCANLINE)<<7)+VIDEO_ROWS,VRAM_RW
     move.w d0,d1
-    addi.w #SCB4,d1
+    addi.w #SCB4+VIDEO_FIRST_SPRITE,d1
     move.w d1,VRAM_ADDR
     move.w d0,d1
     lsl.w #4,d1
-    addi.w #8,d1
     lsl.w #7,d1
     move.w d1,VRAM_RW
     addq.w #1,d0
@@ -959,7 +961,7 @@ SetupSprites:
 .attribute_column:
     move.w d6,d0
     lsl.w #6,d0
-    addi.w #SCB1+1,d0
+    addi.w #SCB1+VIDEO_FIRST_SPRITE*64+1,d0
     move.w d0,VRAM_ADDR
     moveq #VIDEO_ROWS-1,d7
 .attribute_row:

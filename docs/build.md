@@ -20,8 +20,8 @@ The Makefile fetches Macroassembler AS at a pinned commit and builds it under
 Place one source video at `assets/input.mp4`, or pass an explicit path with
 `INPUT_VIDEO`. The encoder uses ffmpeg to:
 
-1. preserve aspect ratio while scaling to cover 320×224;
-2. crop centrally to exactly 320×224;
+1. preserve aspect ratio while scaling to fit inside 320×224;
+2. center the complete picture on a black 320×224 canvas without cropping;
 3. resample presentation to exactly 15 fps;
 4. downmix audio to mono and resample it for YM2610 ADPCM-A.
 
@@ -101,6 +101,7 @@ The smoke test checks:
 ## Emulator notes
 
 - MAME: load `dist/neo-geo-cd-fmv.cue` with the Neo Geo CDZ machine.
-- NeoCD libretro: load the CUE and set `Skip CD Loading` to `Off`.
+- NeoCD libretro: load the CUE, set `Skip CD Loading` to `Off`, and set horizontal
+  overscan to `0` to show the full 320-pixel image.
 - Original hardware: report console model, drive condition, media type, burner,
   observed end-to-end playback, audio behavior, and any repeated failure point.

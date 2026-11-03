@@ -4,7 +4,7 @@
 
 ```text
 source video
-    │  ffmpeg: aspect-preserving scale/crop, 320×224, 15 fps
+    │  ffmpeg: aspect-preserving scale/pad, 320×224, 15 fps
     ▼
 offline encoder
     │  spatial palettes + native tiles + cache allocation + rate control

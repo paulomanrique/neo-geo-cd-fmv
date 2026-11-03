@@ -36,7 +36,13 @@ $(ASL_STAMP):
 	fi
 	git -C vendor/asl fetch --depth 1 origin $(ASL_COMMIT)
 	git -C vendor/asl checkout --detach $(ASL_COMMIT)
-	cp vendor/asl/Makefile.def-samples/Makefile.def-unknown-linux vendor/asl/Makefile.def
+	if test "$$(uname -s)" = Darwin; then \
+		case "$$(uname -m)" in \
+			arm64) profile=arm-osx ;; \
+			*) profile=x86_64-osx ;; \
+		esac; \
+	else profile=unknown-linux; fi; \
+	cp vendor/asl/Makefile.def-samples/Makefile.def-$$profile vendor/asl/Makefile.def
 	$(MAKE) -C vendor/asl -j4
 	touch $@
 
@@ -80,7 +86,7 @@ $(DIST)/$(NAME).cue $(DIST)/$(NAME).bin &: $(DISC)/$(NAME).chd
 	$(CHDMAN) extractcd -i $< -o $(DIST)/$(NAME).cue -ob $(DIST)/$(NAME).bin -f
 
 verify: all
-	tests/verify.sh
+	NAME=$(NAME) PYTHON=$(PYTHON) tests/verify.sh
 
 clean:
 	rm -rf build dist src/main.bin src/main.lst src/main.p \

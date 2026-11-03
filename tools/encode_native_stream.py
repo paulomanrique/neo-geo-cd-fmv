@@ -64,8 +64,8 @@ PCM_BANK_BYTES = PCM_PRELOAD_BYTES // 2
 ADPCM_RATE_NUM = 500000
 ADPCM_RATE_DEN = 27  # 8 MHz / 12 / 6 / 6 = 18518.518... Hz
 VIDEO_FILTER = (
-    f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
-    f"crop={WIDTH}:{HEIGHT},fps={FPS}"
+    f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+    f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={FPS}"
 )
 
 MODE_RAW = 0
