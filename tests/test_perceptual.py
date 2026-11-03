@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from encode_native_stream import quantize_group
 from export_native_video import frames, unpack_tiles
 from perceptual import oklab
-from render_native_stream import tile_indices
+from render_native_stream import tile_indices, neocd_palette_color
 
 
 def black_packet() -> bytes:
@@ -25,6 +25,11 @@ def black_packet() -> bytes:
 
 
 class PerceptualTests(unittest.TestCase):
+    def test_neocd_rgb565_dark_bit_conversion(self):
+        self.assertEqual(neocd_palette_color(0x8000), (0, 0, 0))
+        self.assertEqual(neocd_palette_color(0), (0, 4, 0))
+        self.assertEqual(neocd_palette_color(0x7FFF), (255, 255, 255))
+
     def test_reference_colors(self):
         result = oklab(np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0]]))
         np.testing.assert_allclose(result[0], [0, 0, 0], atol=1e-6)

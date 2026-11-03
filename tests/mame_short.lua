@@ -29,6 +29,14 @@ emu.register_frame_done(function()
     if playing == 1 and play_start_host == nil then
         play_start_host = host_frame
     end
+    if playing == 1 and current < 65535 then
+        local next_frame = space:read_u16(0x10000C)
+        if next_frame < current + 1 or next_frame > current + 2 then
+            print(string.format("FMV_SMOKE_FAIL sequence current=%d next=%d", current, next_frame))
+            machine:exit()
+            return
+        end
+    end
     if started and space:read_u8(0x100004) ~= 0 then
         print(string.format(
             "FMV_SMOKE_FAIL ring_overflow frame=%d next=%d pc=%06X buffered=%d received=%d busy=%d paused=%d",

@@ -178,6 +178,36 @@ Set `FMV_TARGET_FRAME` to capture and check a specific intermediate frame.
 
 ## Emulator notes
 
+### NeoCD regression verification
+
+The MAME smoke test is not sufficient to validate NeoCD's sector-delivery
+timing. Run the installed libretro core without a GUI to check every presented
+frame, the sprite map, valid CPU tile bytes, and validity flags:
+
+```sh
+python3 tests/verify_neocd.py dist/neo-geo-cd-fmv.cue \
+  --core /path/to/neocd_libretro.dylib \
+  --system-dir /path/to/RetroArch/system \
+  --stream build/generated/STREAM.DAT --output build/neocd-check
+```
+
+The Python interpreter must match the core's CPU architecture, for example
+an x86_64 interpreter for an x86_64 macOS core. Use the same NumPy/Pillow
+requirements as the encoder. BIOS files are copied into the output directory
+so test save RAM does not alter the user's BIOS directory. `--fields` defaults
+to 7,000; increase it for longer clips.
+
+The image oracle models NeoCD's RGB565 palette conversion, including the
+shared dark bit in green. The default RGB tolerance is zero. The test fails
+on pixel errors, CPU-state mismatches, frame-sequence errors, faults, or early
+termination. Native PNGs and a diagnostic RAM dump are saved alongside JSON.
+
+Add `--starve-frame 300 --starve-fields 12` to temporarily hide available CD
+sectors and then restore them. This checks that waiting for CD data cannot
+re-present an old frame or corrupt the differential decoder's state.
+
+### Loading the disc
+
 - MAME: load `dist/neo-geo-cd-fmv.cue` with the Neo Geo CDZ machine.
 - NeoCD libretro: load the CUE, set `Skip CD Loading` to `Off`, and set horizontal
   overscan to `0` to show the full 320-pixel image.

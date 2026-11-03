@@ -116,6 +116,7 @@ PrimarySupplyCount      equ $10003E
 LateFields              equ $10004C
 PreviousValidPointer    equ $100050
 CurrentValidPointer     equ $100054
+FrameDecoded            equ $100058
 
     org $0000
 
@@ -347,7 +348,8 @@ Start:
     blo .wait_initial_sectors
     jsr SynchronizeRing
 .wait_synced_frames:
-    cmpi.w #10,SectorsBuffered
+    ; Keep an initial read-ahead reserve instead of starting at the ring floor.
+    cmpi.w #96,SectorsBuffered
     blo .wait_synced_frames
     move.w #$2100,sr
 
@@ -537,10 +539,14 @@ StoreAudioPayload:
 DecodePreparedFrame:
     movem.l d0-d7/a0-a6,-(a7)
     move.b #1,DecoderBusy
+    clr.b FrameDecoded
     clr.b PreparedReady
     jsr AcquireFrameBlock
     lea FRAME_INPUT,a6
     cmpi.l #$4E545631,(a6)      ; "NTV1"
+    bne DecoderFatal
+    move.w 4(a6),d0
+    cmp.w NextFrame,d0
     bne DecoderFatal
     move.w 6(a6),d0
     andi.b #1,d0
@@ -818,15 +824,18 @@ DecodePreparedFrame:
     dbra d7,.supply
     bra .decoded
 .ready:
-    move.b #1,PreparedReady
 .decoded:
     addq.w #1,NextFrame
+    move.b #1,FrameDecoded
     clr.b DecoderBusy
     movem.l (a7)+,d0-d7/a0-a6
     rts
 
 DecoderFatal:
+    move.l #$4445434F,$100040   ; "DECO": authored-frame contract failure
     move.w #$2700,sr
+    clr.b FrameDecoded
+    clr.b PreparedReady
     clr.b Playing
 .hang:
     bra .hang
@@ -843,6 +852,8 @@ UploadAllPrepared:
 UploadSpriteBurst:
     tst.b DecoderBusy
     bne .busy
+    tst.b FrameDecoded
+    beq .busy
     movem.l d0-d7/a0-a3,-(a7)
     move.w SupplyCount,d7
     sub.w UploadIndex,d7
@@ -947,6 +958,9 @@ UploadAudioBurst:
 
 PresentPreparedFrame:
     movem.l d0-d7/a0-a3,-(a7)
+    ; A completed upload cannot advertise the same frame again while the
+    ; main loop waits for the next five CD sectors.
+    clr.b FrameDecoded
     tst.b PalettePending
     beq .map
     lea PREPARED_PALETTE,a0

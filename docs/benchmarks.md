@@ -1,5 +1,20 @@
 # Measured results
 
+## NeoCD sector-underrun regression
+
+NeoCD 2022 b1e04c7 reproduced a player bug not exposed by the MAME captures:
+an exhausted upload could set readiness again while the main loop waited for
+CD sectors. The first CPU/map mismatch appeared at frame 369, and the old
+image stopped at frame 792 with audio continuing.
+
+The corrected player consumes each decoded frame's readiness once, checks
+stream sequence numbers, and starts with 96 buffered sectors. Headless tests
+of the same NeoCD core checked all 1,233 frames against its RGB565 color model:
+all images, displayed maps, valid CPU tile bytes, and validity flags matched,
+with zero pixel error. Repeating the test with a forced 12-field sector wait
+at frame 300 also completed with zero mismatches or sequence errors. The MAME
+test still completed in 4,861 presentation fields.
+
 ## Additional 1,233-frame evaluation
 
 A separate 82.2-second clip was normalized with the same fit/pad geometry for

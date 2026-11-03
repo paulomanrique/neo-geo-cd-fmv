@@ -25,6 +25,14 @@ def palette_color(word: int) -> tuple[int, int, int]:
     )
 
 
+def neocd_palette_color(word: int) -> tuple[int, int, int]:
+    r = ((word >> 8) & 15) * 2 + ((word >> 14) & 1)
+    g = ((word >> 4) & 15) * 2 + ((word >> 13) & 1)
+    b = (word & 15) * 2 + ((word >> 12) & 1)
+    green = g * 2 + int(not word & 0x8000)
+    return round(r * 255 / 31), round(green * 255 / 63), round(b * 255 / 31)
+
+
 def tile_indices(tile: bytes) -> np.ndarray:
     output = np.zeros((TILE, TILE), dtype=np.uint8)
     for y in range(TILE):

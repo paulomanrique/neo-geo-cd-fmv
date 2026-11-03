@@ -18,7 +18,7 @@ from encode_native_stream import (
     PCM_PRELOAD_BYTES, TILES, TILES_X, TILES_Y, VIDEO_PACKET_BYTES,
     AUX_AUDIO_REGION_BYTES, SPRITE_CACHE_TILES, decode_supply,
 )
-from render_native_stream import palette_color, tile_indices
+from render_native_stream import palette_color, neocd_palette_color, tile_indices
 
 
 def decode_audio(payload: bytes) -> bytes:
@@ -59,7 +59,7 @@ def unpack_tiles(tiles: list[bytes]) -> np.ndarray:
     return pixels
 
 
-def frames(stream: Path):
+def frames(stream: Path, *, inspect=None, palette_model="reference"):
     previous = [bytes(128)] * TILES
     cache = {0: bytes(128)}
     previous_map = (0,) * TILES
@@ -67,6 +67,7 @@ def frames(stream: Path):
     palettes = np.zeros((20, 16, 3), dtype=np.uint8)
     palette_ids = np.array([(p // TILES_X // 4) * 5 + (p % TILES_X // 4)
                             for p in range(TILES)])
+    convert_color = neocd_palette_color if palette_model == "neocd" else palette_color
     with stream.open("rb") as source:
         number = 0
         while block := source.read(FRAME_BLOCK_BYTES):
@@ -91,7 +92,7 @@ def frames(stream: Path):
                     or zlib.crc32(block[audio_start:audio_start + audio_size]) != audio_crc):
                 raise ValueError(f"invalid audio packet at {number}")
             if flags & 1:
-                palettes = np.array([palette_color(w) for w in
+                palettes = np.array([convert_color(w) for w in
                                      struct.unpack_from(">320H", block, 32)],
                                     dtype=np.uint8).reshape(20, 16, 3)
             if flags & 2:
@@ -159,6 +160,8 @@ def frames(stream: Path):
                     if not np.array_equal(tile_indices(tile), unpacked):
                         raise ValueError("vector tile decoder disagrees with reference")
             rgb = palettes[palette_ids[:, None, None], indices]
+            if inspect is not None:
+                inspect(number, tile_map, current, current_valid)
             yield rgb.reshape(TILES_Y, TILES_X, 16, 16, 3).transpose(
                 0, 2, 1, 3, 4).reshape(224, 320, 3)
             previous = current

@@ -103,12 +103,23 @@ The LC8951 decoder interrupt copies each 2,048-byte sector into a 384 KiB ring.
 Flow control pauses CD reading at 128 buffered sectors and resumes at 48. Each
 prepared frame consumes exactly five sectors.
 
+Playback starts after 96 synchronized sectors have accumulated, leaving a
+read-ahead reserve before audio starts. This buffers about 1.28 seconds of
+stream before playback rather than beginning at the ring's lower limit.
+
 ## Presentation and CPU work
 
 The 68000 reconstructs a frame in alternating software tile buffers. Exact
 cache references avoid redundant 128-byte baseline copies. New tiles are
 uploaded during VBlank, then the 280-word sprite map and any pending palettes
 are committed as one presentation step.
+
+`FrameDecoded` distinguishes an unpresented decoded frame from an already
+consumed upload. Only an unpresented frame can become `PreparedReady`, and
+presentation consumes that state. If the next five sectors are unavailable,
+the player holds the visible frame; a completed old upload cannot advertise
+readiness again. Frame sequence numbers are also checked before decoding,
+and contract failures set the `DECO` fault marker for emulator diagnostics.
 
 A fixed-point accumulator maps the 15 fps video clock onto the Neo Geo refresh
 clock of approximately 59.1856 Hz. Audio is authoritative over long playback:
