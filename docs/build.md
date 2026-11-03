@@ -201,6 +201,27 @@ The image oracle models NeoCD's RGB565 palette conversion, including the
 shared dark bit in green. The default RGB tolerance is zero. The test fails
 on pixel errors, CPU-state mismatches, frame-sequence errors, faults, or early
 termination. Native PNGs and a diagnostic RAM dump are saved alongside JSON.
+The report also records the core's refresh rate and the difference between
+authored video duration and elapsed audio samples. Timing drift is diagnostic;
+the zero-error reconstruction checks do not establish audio/video synchronization.
+
+For NeoCD b1e04c7, add `--check-pcm` to compare the initial PCM load and every
+completed bank refill byte for byte with the authored ADPCM. The optional
+check uses that core's internal memory layout and validates its RAM/VRAM
+pointers before reading PCM. Missing refills also fail the test. Add
+`--audio-output build/neocd-check/audio.wav` to record the core's audio output.
+`--capture-every 0` disables periodic PNGs; all frames are still compared.
+
+Generate a five-minute media-free stream to exercise successive refills and
+both staging-bank wraps:
+
+```sh
+python3 tests/create_audio_stress.py build/audio-stress/generated
+```
+
+Build its generated files as a separate test disc, then run the NeoCD verifier
+with `--check-pcm --fields 21000`. Preserve normal generated media before
+replacing `build/generated/` with a fixture.
 
 Add `--starve-frame 300 --starve-fields 12` to temporarily hide available CD
 sectors and then restore them. This checks that waiting for CD data cannot

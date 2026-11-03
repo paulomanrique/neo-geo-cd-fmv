@@ -129,7 +129,7 @@ video never changes the physical five-sector cadence to chase a decode burst.
 
 Audio is mono YM2610 ADPCM-A at 18,518.518 samples/s. The first 1 MiB is loaded
 at boot as `V1.PCM`. Later bytes arrive in the 640-byte auxiliary region and
-fill a 512 KiB circular staging buffer in program RAM.
+fill two alternating 512 KiB staging banks in program RAM.
 
 The Z80 alternates two 512 KiB ADPCM-A channels. When one half completes, it
 starts the other and increments a reply byte. The 68000 observes that reply and
@@ -137,13 +137,18 @@ uploads the next staged half into the now-inactive PCM bank. The ADPCM encoder
 resets its accumulator and step index at every 512 KiB boundary, matching the
 YM2610 decoder reset when a channel starts.
 
+The producer can begin filling the following staging bank while the previous
+one is being uploaded. A single 512 KiB ring is insufficient: CD read-ahead
+can overwrite its beginning before the first upload starts.
+
 ## Program RAM layout
 
 | Range | Purpose |
 |---|---|
 | `$020000–$07FFFF` | 384 KiB CDC sector ring |
-| `$080000–$0FFFFF` | 512 KiB streamed-audio staging buffer |
+| `$080000–$0FFFFF` | Audio staging bank A, 512 KiB |
 | `$100000–$1000FF` | Player state and diagnostics |
+| `$110000–$18FFFF` | Audio staging bank B, 512 KiB |
 | `$1A0000–$1B17FF` | Alternating native-tile buffers |
 | `$1B1800–$1B1C5F` | Alternating 280-word maps |
 | `$1B1C60–$1B1EDF` | Prepared palettes |

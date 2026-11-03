@@ -1,5 +1,31 @@
 # Measured results
 
+## Long complex clip and streamed-audio regression
+
+A 198.13-second animated music video produced 2,972 frames. The encoder averaged
+63.315 tile uploads and 8,057.39 used video bytes per frame, with peaks of 64
+and 9,518 respectively. This is substantially closer to the upload ceiling
+than the earlier 1,233-frame clip.
+
+NeoCD b1e04c7 checked all 2,972 displayed frames, maps, valid CPU tile bytes,
+and validity flags with zero mismatches. The initial 1 MiB PCM load and both
+subsequent refills also matched every authored byte. MAME 0.289 reached frame
+2,971 in 11,722 presentation fields, with a final capture mean RGB difference
+of 0.0762/255.
+
+The long test exposed a staging-buffer bug: the producer could wrap a single
+512 KiB ring before upload of the previous half began. A deterministic
+three-minute fixture reproduced 26,161 altered bytes in the first refill.
+Two separate staging banks fixed the failure. A five-minute fixture then
+checked all 4,500 frames and four refills, including reuse of both staging
+banks, with zero image or PCM mismatches.
+
+Timing remains a separate limitation. The player schedules against 59.1856 Hz,
+while this NeoCD core reports 59.599905 Hz. The complex clip ended about 1.3
+seconds ahead of its audio (1.221 seconds measured). Exact image/PCM reconstruction does not imply
+correct synchronization; the current headless checks report timing separately.
+These results do not establish physical-console playback quality.
+
 ## NeoCD sector-underrun regression
 
 NeoCD 2022 b1e04c7 reproduced a player bug not exposed by the MAME captures:

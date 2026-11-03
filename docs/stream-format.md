@@ -107,13 +107,13 @@ Audio is YM2610 ADPCM-A at `18,518.518 Hz`. Its header and per-frame payload
 fit in the first 640 bytes of the auxiliary sector; the remaining 1,408 bytes
 increase the logical video budget from 8,192 to 9,600 bytes without changing
 the physical five-sector cadence. The first 1 MiB is loaded by the
-BIOS as `V1.PCM`. Remaining bytes arrive in auxiliary packets and fill one
-512 KiB circular staging buffer in program RAM. The Z80 alternates the two
+BIOS as `V1.PCM`. Remaining bytes arrive in auxiliary packets and fill two
+alternating 512 KiB staging banks in program RAM. The Z80 alternates the two
 512 KiB PCM banks and increments the sound reply byte whenever a bank becomes
-inactive. The 68000 uploads the staging buffer to that inactive PCM bank while
+inactive. The 68000 uploads the corresponding staging bank to that inactive PCM bank while
 the other bank is playing. Its upload rate is higher than the incoming ADPCM
-rate, so the reader stays ahead of the producer as the circular buffer is
-refilled for the following half.
+rate. Separate staging banks keep read-ahead data for the following half from
+overwriting bytes whose upload has not yet started.
 
 Every 512 KiB ADPCM bank is encoded independently. The encoder resets its
 accumulator and step index at each bank boundary, matching the state reset in
@@ -123,8 +123,9 @@ the YM2610 ADPCM-A channel-start routine.
 
 ```text
 $020000-$07FFFF  384 KiB CDC sector ring (192 sectors)
-$080000-$0FFFFF  512 KiB streamed-audio circular staging buffer
+$080000-$0FFFFF  512 KiB audio staging bank A
 $100000-$1000FF  player state and fault diagnostics
+$110000-$18FFFF  512 KiB audio staging bank B
 $1A0000-$1A8BFF   previous native tiles
 $1A8C00-$1B17FF   current native tiles
 $1B1800-$1B1C5F   two 280-word maps

@@ -12,7 +12,8 @@ RING_END                equ $080000
 RING_BYTES              equ RING_END-RING_START
 SECTOR_BYTES            equ 2048
 AUDIO_BUFFER            equ $080000
-AUDIO_BUFFER_BYTES      equ $080000
+AUDIO_BUFFER_B          equ $110000
+AUDIO_BUFFER_BYTES      equ $100000
 PREVIOUS_TILES          equ $1A0000
 CURRENT_TILES           equ $1A8C00
 PREVIOUS_MAP            equ $1B1800
@@ -523,11 +524,21 @@ StoreAudioPayload:
     move.l AudioWriteOffset,d0
     andi.l #AUDIO_BUFFER_BYTES-1,d0
     lea AUDIO_BUFFER,a1
+    cmpi.l #PCM_HALF_BYTES,d0
+    blo .audio_address
+    subi.l #PCM_HALF_BYTES,d0
+    lea AUDIO_BUFFER_B,a1
+.audio_address:
     adda.l d0,a1
 .copy_audio:
     move.b (a0)+,(a1)+
-    cmpa.l #AUDIO_BUFFER+AUDIO_BUFFER_BYTES,a1
-    blo .audio_next
+    cmpa.l #AUDIO_BUFFER+PCM_HALF_BYTES,a1
+    bne .audio_wrap
+    lea AUDIO_BUFFER_B,a1
+    bra .audio_next
+.audio_wrap:
+    cmpa.l #AUDIO_BUFFER_B+PCM_HALF_BYTES,a1
+    bne .audio_next
     lea AUDIO_BUFFER,a1
 .audio_next:
     addq.l #1,AudioWriteOffset
@@ -934,6 +945,9 @@ UploadAudioBurst:
     lea AUDIO_BUFFER,a0
     moveq #0,d3
     move.b AudioUploadBank,d3
+    beq .audio_source_ready
+    lea AUDIO_BUFFER_B,a0
+.audio_source_ready:
     adda.l d0,a0
     move.l d0,d2
     add.l d2,d2
